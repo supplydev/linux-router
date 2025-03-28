@@ -960,79 +960,76 @@ CUSTOM_CHAINS_4_filter=
 CUSTOM_CHAINS_4_nat=
 CUSTOM_CHAINS_6_filter=
 CUSTOM_CHAINS_6_nat=
-iptb() 
-{
-    local FoS=$1 # 4 | 6
+iptb() {
+    local FoS=$1      # IP version: 4 or 6
     shift
-    local Vis=$1 # 'v' | 'n'
+    local Vis=$1      # 'v' (verbose) or 'n' (normal)
     shift
-    local T=$1 # table
+    local T=$1        # table: filter, nat, etc.
     shift
-    local ACT=$1 # action: I | A | N  .  On undo: I or A -> D , N -> F+X
+    local ACT=$1      # action: A (append), I (insert), N (new chain)
     shift
-    local CH=$1 # chain
+    local CH=$1       # chain name
     shift
-    
-    [[ "$IPV6" -ne 1 && "$FoS" == "6" ]] && return
-    
+
+    [[ "$IPV6" -ne 1 && "$FoS" == "6" ]] && return 0
+
     local CMD_HEAD=""
     local MOUTH=""
     local NECK=""
-    local HAND_UN_NC=0
     local TAIL=""
-    
-    local FULL=""
+    local HAND_UN_NC=0
     local ADD_TO_UNDO=1
-    
-    local arr_name  w
-    
-    for arr_name in CUSTOM_CHAINS_4_filter CUSTOM_CHAINS_4_nat CUSTOM_CHAINS_6_filter CUSTOM_CHAINS_6_nat
-    do
-        local arr_content
+    local FULL=""
+    local arr_name w
+
+    # Build iptables command head
+    [[ "$FoS" == "4" ]] && CMD_HEAD="iptables -w"
+    [[ "$FoS" == "6" ]] && CMD_HEAD="ip6tables -w"
+
+    [[ "$Vis" == 'v' ]] && MOUTH="-v"
+
+    NECK="-t ${T}"
+
+    # If creating a new custom chain, track it for cleanup
+    if [[ "$ACT" == "N" ]]; then
+        eval "CUSTOM_CHAINS_${FoS}_${T}=\"\${CUSTOM_CHAINS_${FoS}_${T}} ${CH}\""
+        HAND_UN_NC=1
+    fi
+
+    # Prevent duplicate undo entries for tracked custom chains
+    for arr_name in CUSTOM_CHAINS_4_filter CUSTOM_CHAINS_4_nat CUSTOM_CHAINS_6_filter CUSTOM_CHAINS_6_nat; do
         eval arr_content=\"\${$arr_name}\"
-        #echo $arr_content
-        
-        for w in  $arr_content
-        do
-            if [[ "$arr_name" =~ "$FoS" && "$arr_name" =~ "$T" && "$w" == "$CH" ]]; then
+        for w in $arr_content; do
+            if [[ "$arr_name" == *"${FoS}"* && "$arr_name" == *"${T}"* && "$w" == "$CH" ]]; then
                 ADD_TO_UNDO=0
             fi
         done
     done
-    
 
-    [[ "$FoS" == "4" ]] && CMD_HEAD="iptables -w "
-    [[ "$FoS" == "6" ]] && CMD_HEAD="ip6tables -w "
-    
-    [[ "$Vis" == 'v' ]] && MOUTH="-v"
-    
-    NECK="-t ${T}"
-    
-    if [[ "$ACT" == "N" ]]; then
-        eval CUSTOM_CHAINS_${FoS}_${T}=\"\${CUSTOM_CHAINS_${FoS}_${T}} ${CH}\"
-        HAND_UN_NC=1
+    # Conditionally include comment extension — safe and optional
+    if [[ -n "$NETFILTER_XT_MATCH_COMMENT" && "$NETFILTER_XT_MATCH_COMMENT" != "0" ]]; then
+        TAIL="-m comment --comment lrt${$}${SUBNET_IFACE}"
+    else
+        TAIL=""
     fi
-    
-    
-    
-    [[ ! "$NETFILTER_XT_MATCH_COMMENT" == "0" ]] && TAIL="-m comment --comment lrt${$}${SUBNET_IFACE}"
-    
+
+    # Record undo rules
     if [[ "$ADD_TO_UNDO" -eq 1 ]]; then
         if [[ "$ACT" == "I" || "$ACT" == "A" ]]; then
-            echo "$CMD_HEAD $NECK -D ${CH} $@ $TAIL" >> $CONFDIR/undo_iptables.sh 
+            echo "$CMD_HEAD $NECK -D ${CH} $@ $TAIL" >> "$CONFDIR/undo_iptables.sh"
         fi
-        
         if [[ "$HAND_UN_NC" -eq 1 ]]; then
-            echo "$CMD_HEAD $NECK -F ${CH} $@ $TAIL" >> $CONFDIR/undo_iptables_2.sh
-            echo "$CMD_HEAD $NECK -X ${CH} $@ $TAIL" >> $CONFDIR/undo_iptables_2.sh
+            echo "$CMD_HEAD $NECK -F ${CH} $@ $TAIL" >> "$CONFDIR/undo_iptables_2.sh"
+            echo "$CMD_HEAD $NECK -X ${CH} $@ $TAIL" >> "$CONFDIR/undo_iptables_2.sh"
         fi
     fi
-    
- 
-    
 
     FULL="$CMD_HEAD $MOUTH $NECK -${ACT} ${CH} $@ $TAIL"
-    #echo $FULL
+
+    # Uncomment for debugging:
+    # echo "[iptb] $FULL"
+
     $FULL
     return $?
 }
